@@ -1,0 +1,180 @@
+body {
+    margin-left: 15%;
+    margin-right: 15%;
+    background-color: gray;
+}
+
+.first_layer_content {
+    background-color: lightgray;
+    padding: 20px;
+    border-radius: 10px;
+    box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+}
+
+.second_layer_content{
+    margin-left: 12px;
+    margin-bottom: 60px;
+}
+
+h1{
+    text-align: center;
+    color: green;
+}
+
+h2 {
+    color: green;
+    border-bottom: 5px solid green;
+}
+
+h2::before {
+    content: attr(data-prefix) ". ";
+    color: green;
+}
+
+h3, h4 {
+    color: green;
+}
+
+h3::before {
+    content: attr(data-prefix) ". ";
+    color: green;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.95em;
+}
+
+th, td {
+    padding: 6px 8px;
+    border: 2px solid #e5e7eb;
+    text-align: left;
+}
+
+th {
+    background: #f3f4f6;
+    font-weight: 600;
+}
+
+a {
+    color: black;
+    text-decoration: underline;
+    text-decoration-style: dotted;
+}
+
+a:hover {
+    color: green;
+    text-decoration-color: green;
+}
+
+.note-small {
+    font-size: 0.85em;
+    color: #4b5563;
+    line-height: 1.5;
+    margin-top: 4px;
+}
+
+.inline-code {
+    padding: 0.1em 0.35em;
+    margin: 0 0.1em;
+    font-size: 0.92em;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    background: #f3f4f6;
+    color: #1f2937;
+    border: 1px solid #e5e7eb;
+    border-radius: 4px;
+    white-space: nowrap;
+}
+
+.mask {
+    background-color: yellowgreen;
+    color: yellowgreen;
+    border: solid yellowgreen 2px;
+    border-radius: 5px;
+    cursor: pointer;
+}
+
+.mask.visible {
+    background-color: transparent;
+    color: black;
+    border: solid gray 2px;
+}
+
+.mask::before {
+    content: "〇 ";
+    color: gray;
+}
+
+ul {
+    list-style-type: square;
+}
+
+ul li::marker {
+    color: green;
+}
+
+ol li::marker {
+    color: green;
+}
+
+.code-card {
+    margin: 5px 0;
+    padding: 0px;
+    background-color: #f5f5f5;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.code-header {
+    display: flex;
+    align-items: center;
+    padding: 2px 12px;
+    gap: 5px;
+    background-color: darkgreen;
+    border-bottom: 1px solid #ddd;
+    border-radius: 8px 8px 0 0;
+}
+
+.code-title {
+    font-weight: bold;
+    color: white;
+}
+
+pre {
+    margin: 0;
+    padding: 0;
+    overflow-x: auto;
+}
+
+.code-block {
+    display: block;
+    padding: 15px;
+    margin: 0;
+    font-family: "Courier New", Courier, monospace;
+    font-size: 14px;
+    line-height: 1.5;
+    white-space: pre;
+}
+
+.copy-btn {
+    padding: 0px 10px;
+    color: white;
+    background-color: green;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+}
+
+.copy-btn.copied {
+    background-color: darkgreen;
+}
+
+.copy-btn:hover {
+    background-color: lightgreen;
+}
+
+.copy-btn.copied:hover {
+    background-color: darkgreen;
+}

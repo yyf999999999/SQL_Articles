@@ -1,0 +1,968 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="main.css">
+    <title>Drizzle ORMで学ぶSQLの実行性能</title>
+</head>
+<body>
+    <div class="first_layer_content">
+        <h1>Drizzle ORMで学ぶSQLの実行性能</h1>
+
+        <h2 data-prefix="1">はじめに</h2>
+        <div class="second_layer_content">
+            <h3 data-prefix="1.1">本教材の背景</h3>
+            <p>
+                Webアプリケーション開発では、データベースを利用したデータの保存や検索が不可欠です。近年の開発現場では、SQL文を直接記述する代わりに、ORM（Object-Relational Mapping）と呼ばれる仕組みを利用してデータベースにアクセスする方法が広く使われています。ORMを利用すると、プログラミング言語のコードとしてデータベース操作を記述できるため、可読性の向上や型安全性の確保、SQLインジェクションの防止といった利点があります。
+            </p>
+            <p>
+                しかしその一方で、ORMはSQLを抽象化するため、実際にどのようなSQL文が発行されているのか、またそのSQLがデータベース内部でどのように実行されているのかが見えにくくなるという側面もあります。データベースの処理性能は、インデックスの有無やデータ量、クエリの構造、実行計画などに大きく影響されます。そのため、ORMを利用している場合でも、データベース内部の仕組みに関する理解は依然として重要です。
+            </p>
+
+            <h3 data-prefix="1.2">本教材の目的</h3>
+            <p>
+                本教材の目的は、<strong>ORMを利用したアプリケーション開発と、データベース内部の動作との関係を実験を通して理解すること</strong>です。
+            </p>
+            <p>
+                本教材では、TypeScript環境で利用できる軽量なORMである Drizzle ORM を用いてPostgreSQLに接続し、データベース操作を行います。そして、ORMが発行するSQL文を確認するとともに、そのSQLがPostgreSQL上でどのような実行計画に基づいて処理されるのかを検証します。
+            </p>
+            <p>
+                特に、次の点に注目します。
+            </p>
+            <ul>
+                <li>ORMで記述した処理が、どのようなSQL文に変換されているか</li>
+                <li>インデックスの有無によって実行計画や処理時間がどのように変化するか</li>
+                <li>JOINを含むクエリにおいて、データベースがどのような方法でテーブルを結合しているか</li>
+            </ul>
+            <p>
+                これらを実験によって確認することで、「ORMを使えばデータベースのことを意識しなくてもよい」という考えが必ずしも正しくないこと、そして<strong>ORMの知識とデータベースの知識は互いに補完し合う関係にあること</strong>を理解することを目標とします。
+            </p>
+
+            <h3 data-prefix="1.3">対象読者</h3>
+            <p>
+                本教材は、すでにデータベース工学第1回講義～第12回講義を学習している読者を対象としています。具体的には、おもに次の内容を理解していることを前提とします。
+            </p>
+            <ul>
+                <li>データの永続化や管理におけるDBMSの役割と導入効果を理解している</li>
+                <li>リレーショナルモデルやドキュメント指向モデルなど、主要なデータベースモデルの特性を理解している</li>
+                <li>Dockerを用いてPostgreSQLの実行環境を構築し、コンソールやDbGateから接続できる</li>
+                <li>ER図を用いた概念設計ができる</li>
+                <li>正規化、外部キー制約、インデックス設計などの論理設計ができる</li>
+                <li>SQLを用いた各種クエリを記述・実行できる</li>
+                <li>TypeScriptから<span class="inline-code">pg</span>ドライバや Prisma、Drizzle ORM を利用できる</li>
+                <li>PostgreSQLのユーティリティを使ってバックアップや実行計画の確認ができる</li>
+            </ul>
+            <p>
+                そのため、本教材ではSQLの基本文法そのものの解説は行いません。代わりに、<strong>ORMを通してそれらの知識がどのように関係してくるのか</strong>に重点を置いて説明します。
+            </p>
+
+            <h3 data-prefix="1.4">本教材の構成</h3>
+            <p>
+                本教材は、Drizzle ORMの導入から始まり、最終的にPostgreSQLの実行計画の分析へと進む構成になっています。
+            </p>
+            <ul>
+                <li><strong>第2章</strong>：ORMの概要とDrizzle ORM</li>
+                <li><strong>第3章</strong>：Drizzle ORMの導入とPostgreSQL接続</li>
+                <li><strong>第4章</strong>：例アプリのテーブル定義とCRUD実装</li>
+                <li><strong>第5章</strong>：インデックスの有無による検索性能の違い</li>
+                <li><strong>第6章</strong>：JOINを含むクエリの実行計画分析</li>
+                <li><strong>第7章</strong>：ORM利用時の性能設計上のポイント</li>
+                <li><strong>第8章</strong>：演習問題と総合確認</li>
+            </ul>
+            <p>
+                これらを通して、読者が<strong>「アプリケーション側の利便性」と「データベース内部の仕組み」を結びつけて理解できるようになること</strong>を目指します。
+            </p>
+
+            <h3 data-prefix="1.5">確認テスト</h3>
+            <p>
+                <strong>問1 </strong>ORMを利用するとSQLは抽象化されますが、実際にデータベースで実行されるのは最終的に<span class="mask">SQL</span>文です。
+            </p>
+            <p>
+                <strong>問2 </strong>データベースの処理性能は、インデックスの有無やデータ量、クエリの構造、そして<span class="mask">実行計画</span>などに影響を受けます。
+            </p>
+
+            <h3 data-prefix="1.6">参考文献</h3>
+            <ul>
+                <li><a href="https://www.issoh.co.jp/tech/details/3755" target="_blank">
+                    ORMとは何か？Object-Relational Mappingの基本概念とその役割について解説 | 株式会社一創
+                </a></li>
+                <li><a href="https://aws.amazon.com/jp/what-is/object-relational-mapping" target="_blank">
+                    オブジェクトリレーショナルマッピング (ORM) とは - オブジェクトリレーショナルマッピングの説明 - AWS
+                </a></li>
+                <li><a href="https://chot-inc.com/service/jamstack/orm" target="_blank">
+                    ORM | Jamstack用語集 | chot Inc.（ちょっと株式会社）
+                </a></li>
+            </ul>
+        </div>
+        <h2 data-prefix="2">ORMの概要とDrizzle ORMの特徴</h2>
+        <div class="second_layer_content">
+            <h3 data-prefix="2.1">ORM（Object-Relational Mapping）とは</h3>
+            <p>
+                ORM（Object-Relational Mapping）とは、<strong>プログラム上のオブジェクトとリレーショナルデータベースのテーブルを対応付ける仕組み</strong>のことです。
+            </p>
+            <p>
+                リレーショナルデータベースでは、データは「表（テーブル）」の形で管理されます。一方、アプリケーション（特にTypeScriptやJavaなどのオブジェクト指向言語）では、データは「オブジェクト」として扱われます。<br>
+                ORMはこの<strong>「オブジェクトの世界」と「テーブルの世界」</strong>を橋渡しする役割を担います。
+            </p>
+            <table>
+                <tr>
+                    <th>id</th>
+                    <th>name</th>
+                    <th>email</th>
+                </tr>
+                <tr>
+                    <td>1</td>
+                    <td>Sato</td>
+                    <td>sato@example.com</td>
+                </tr>
+            </table>
+            <p>
+                ORMを使うと、この1行のデータを次のようなオブジェクトとして扱えるようになります。
+            </p>
+            <div class="code-card">
+                <div class="code-header">
+                    <span class="code-title">usersテーブルの1レコードに対応するオブジェクト例</span>
+                    <button class="copy-btn" type="button">コピー</button>
+                </div>
+                <pre><code class="code-block">{
+  id: 1,
+  name: "Sato",
+  email: "sato@example.com"
+}</code></pre>
+            </div>
+            <p>
+                このように、SQLを直接書かなくても、プログラムのコードとしてデータベース操作が可能になるのがORMの基本的な考え方です。
+            </p>
+
+            <h3 data-prefix="2.2">ORMを利用するメリットと注意点</h3>
+            <p>
+                ORMは便利な仕組みですが、万能ではありません。ここでは利点と注意点を整理します。
+            </p>
+            <h4>
+                ■ ORMの主なメリット
+            </h4>
+            <ul>
+                <li>
+                    <strong>SQLを直接書かずにデータベース操作ができる</strong><br>
+                    プログラミング言語の文法で処理を書けるため、アプリケーションコードとの統一感が生まれます。
+                </li>
+                <li>
+                    <strong>型安全性を確保しやすい</strong><br>
+                    TypeScriptなどと組み合わせることで、存在しないカラム名の指定や型の不一致といったミスをコンパイル時に発見できます。
+                </li>
+                <li>
+                    <strong>SQLインジェクション対策が容易になる</strong><br>
+                    多くのORMでは、値のバインド処理が自動で安全に行われるため、セキュリティリスクを減らせます。
+                </li>
+            </ul>
+            <h4>
+                ■ ORM利用時の注意点
+            </h4>
+            <ul>
+                <li>
+                    <strong>発行されるSQLが見えにくくなる</strong><br>
+                    ORMは内部でSQLを自動生成するため、どのようなクエリが実行されているのかを意識しないまま使ってしまうことがあります。
+                </li>
+                <li>
+                    <strong>パフォーマンス問題に気付きにくい</strong><br>
+                    非効率なクエリが生成されていても、コード上はシンプルに見えるため、性能低下の原因が分かりにくくなることがあります。
+                </li>
+            </ul>
+            <p>そのため、ORMを利用する場合でも、<strong>SQLや実行計画、インデックスといったデータベース内部の知識は依然として重要です。</strong></p>
+            
+            <h3 data-prefix="2.3">主なORMの種類と特徴</h3>
+            <p>
+                世の中には多くのORMが存在し、それぞれ設計思想が異なります。ここでは代表的なタイプを簡単に整理します。
+            </p>
+            <h4>① フル機能型ORM</h4>
+            <p>
+                例：Hibernate（Java）、Entity Framework（.NET）
+            </p>
+            <ul>
+                <li>データベース操作の多くを自動化</li>
+                <li>マイグレーションやキャッシュ機能なども充実</li>
+                <li>学習コストや設定項目が多い</li>
+            </ul>
+            <h4>② クエリビルダ寄りのORM</h4>
+            <p>
+                例：Knex.js など
+            </p>
+            <ul>
+                <li>SQLをプログラム的に組み立てる</li>
+                <li>SQLに近い感覚で書ける</li>
+                <li>自動マッピング機能は比較的少なめ</li>
+            </ul>
+            <h4>③ 型安全性重視の軽量ORM</h4>
+            <p>
+                例：Prisma、Drizzle ORM
+            </p>
+            <ul>
+                <li>TypeScriptとの相性が良い</li>
+                <li>スキーマと型の連携が強力</li>
+                <li>必要以上の抽象化を行わず、SQLとの距離が近い</li>
+            </ul>
+            <p>
+                Drizzle ORMはこの中でも<strong>「軽量かつ型安全性を重視したORM」</strong>に分類されます。
+            </p>
+
+            <h3 data-prefix="2.4">Drizzle ORMの特徴</h3>
+            <p>
+                Drizzle ORMは、TypeScript環境で利用される比較的新しいORMで、次のような特徴があります。
+            </p>
+            <h4>SQLに近い記述スタイル</h4>
+            <p>
+                Drizzleは、従来の「完全に抽象化されたORM」とは異なり、<strong>SQLの構造をある程度意識した書き方</strong>になっています。<br>
+                そのため、裏でどのようなSQLが発行されるのかをイメージしやすい設計になっています。
+            </p>
+            <h4>■ 強力な型推論</h4>
+            <p>
+                テーブル定義をTypeScriptで記述すると、その情報がそのままクエリの型チェックに利用されます。
+            </p>
+            <ul>
+                <li>存在しないカラムを指定するとエラーになる</li>
+                <li>数値カラムに文字列を入れようとするとエラーになる</li>
+            </ul>
+            <p>
+                といったチェックが、実行前に行われます。
+            </p>
+            <h4>■ 軽量でシンプルな構成</h4>
+            <p>
+                大規模な設定ファイルや複雑なコード生成を必要とせず、比較的シンプルに導入できます。<br>
+                学習コストが低く、「まずはORMを試してみたい」という用途にも適しています。
+            </p>
+
+            <h3 data-prefix="2.5">本教材におけるDrizzle ORMの位置付け</h3>
+            <p>
+                本教材では、Drizzle ORMを<strong>「データベース内部の動作を隠しすぎないORM」</strong> として扱います。
+            </p>
+            <p>
+                つまり、
+            </p>
+            <ul>
+                <li>ORMを使って便利に開発する体験</li>
+                <li>その裏で発行されるSQLを確認する体験</li>
+                <li>さらにそのSQLの実行計画をPostgreSQLで分析する体験</li>
+            </ul>
+            <p>
+                これらを結び付けるためのツールとしてDrizzle ORMを利用します。
+            </p>
+            <p>
+                第3章以降では、実際にDrizzle ORMを導入し、PostgreSQLに接続してデータ操作を行いながら、ORMとデータベース内部動作の関係を具体的に確認していきます。
+            </p>
+
+            <h3 data-prefix="2.6">確認テスト</h3>
+            <p>
+                <strong>問1 </strong>ORMとは、プログラム上の<span class="mask">オブジェクト</span>とリレーショナルデータベースのテーブルを対応付ける仕組みである。
+            </p>
+            <p>
+                <strong>問2 </strong>ORMを利用するとSQLを直接書かずにデータベース操作ができるが、その結果、実際に発行される<span class="mask">SQL</span>が見えにくくなるという注意点がある。
+            </p>
+            <p>
+                <strong>問3 </strong>ORMを利用する主なメリットを3つ挙げてください。
+            </p>
+            <p>
+                <strong>答</strong>：<span class="mask">SQLを直接書かずにデータベース操作ができる</span>、<span class="mask">型安全性を確保しやすい</span>、<span class="mask">SQLインジェクション対策が容易になる</span>
+            </p>
+
+            <h3 data-prefix="2.7">参考文献</h3>
+            <ul>
+                <li><a href="https://orm.drizzle.team/docs/overview" target="_blank">
+                    Drizzle ORM - Why Drizzle?
+                </a></li>
+                <li><a href="https://www.npmjs.com/package/drizzle-orm" target="_blank">
+                    drizzle-orm - npm
+                </a></li>
+                <li><a href="https://www.issoh.co.jp/tech/details/7939" target="_blank">
+                    Drizzle ORMの特徴と利点：型安全性・パフォーマンス・柔軟性 | 株式会社一創
+                </a></li>
+            </ul>
+        </div>
+
+        <h2 data-prefix="3">Drizzle ORMの導入とPostgreSQLへの接続</h2>
+        <div class="second_layer_content">
+            <h3 data-prefix="3.1">前提条件と授業環境</h3>
+            <p>
+                この教材では、データベース工学の授業で使用した<strong>Docker上のPostgreSQL環境</strong>（<span class="inline-code">DB-PostgreSQL</span>リポジトリ）を利用して進めます。<br>
+                すなわち、<span class="inline-code">npm run db:up</span>などで PostgreSQLを起動し、<strong>DockerコンテナのPostgreSQL</strong>を操作対象とします。
+            </p>
+
+            <h3 data-prefix="3.2">依存パッケージのインストール</h3>
+            <p>
+                まず、プロジェクトルート(<span class="inline-code">DB-PostgreSQL</span>)でDrizzle ORMと関連パッケージをインストールします。
+            </p>
+            <div class="code-card">
+                <div class="code-header">
+                    <span class="code-title">Drizzle ORM と関連パッケージのインストール</span>
+                    <button class="copy-btn" type="button">コピー</button>
+                </div>
+                <pre><code class="code-block">npm install drizzle-orm pg dotenv
+npm install -D drizzle-kit tsx @types/pg</code></pre>
+            </div>
+            <ul>
+                <li><span class="inline-code">drizzle-orm</span>: Drizzle ORM本体</li>
+                <li><span class="inline-code">pg</span>: PostgreSQL用Node.jsドライバ</li>
+                <li><span class="inline-code">dotenv</span>: <span class="inline-code">.env</span>を読み込み環境変数化</li>
+                <li><span class="inline-code">drizzle-kit</span>: Drizzle用ツール（マイグレーションなど）</li>
+                <li><span class="inline-code">tsx</span>: TypeScript実行ツール</li>
+                <li><span class="inline-code">@types/pg</span>: <span class="inline-code">pg</span>の型定義（TypeScript 用）</li>
+            </ul>
+            <p>
+                警告(<span class="inline-code">deprecated</span>)が出る場合がありますが、Drizzle ORMの基本動作には影響しません。
+            </p>
+
+            <h3 data-prefix="3.3">Drizzle ORMで接続を確認するコード</h3>
+            <p>
+                次に、Drizzle ORMを使ってPostgreSQLへの接続を確認するためのコードを作成します。
+            </p>
+            <p>
+                以下のコードを<span class="inline-code">src/setupDrizzle.ts</span>などに記述します：
+            </p>
+            <div class="code-card">
+                <div class="code-header">
+                    <span class="code-title">Drizzle ORM接続テスト用コード</span>
+                    <button class="copy-btn" type="button">コピー</button>
+                </div>
+                <pre><code class="code-block">import dotenv from "dotenv";
+dotenv.config();
+
+import { drizzle } from "drizzle-orm/node-postgres";
+import { Pool } from "pg";
+
+console.log("DATABASE_URL =", process.env.DATABASE_URL);
+
+// PostgreSQL 接続プールを作成
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+});
+
+// Drizzle ORM を初期化
+export const db = drizzle(pool);
+
+// 接続テスト用関数
+async function testConnection() {
+  const result = await db.execute("SELECT version()");
+  console.log("Connected to PostgreSQL:", result.rows);
+}
+
+testConnection().catch(console.error);
+</code></pre>
+            </div>
+            <ul>
+                <li>dotenvを最初に呼び出し<span class="inline-code">.env</span>を読み込みます</li>
+                <li><span class="inline-code">Pool</span>で接続プールを作成</li>
+                <li><span class="inline-code">db.execute("SELECT version()")</span>で簡単なSQLを実行</li>
+            </ul>
+
+            <h3 data-prefix="3.4">接続確認の実行</h3>
+            <p>
+                ターミナルで次のように実行すると、PostgreSQL のバージョン情報が表示されます：
+            </p>
+            <div class="code-card">
+                <div class="code-header">
+                    <span class="code-title">接続確認の実行コマンド</span>
+                    <button class="copy-btn" type="button">コピー</button>
+                </div>
+                <pre><code class="code-block">npx tsx src/setupDrizzle.ts</code></pre>
+            </div>
+            <p>
+                成功例：
+            </p>
+            <div class="code-card">
+                <div class="code-header">
+                    <span class="code-title">接続成功時の出力例</span>
+                </div>
+                <pre><code class="code-block">DATABASE_URL = postgresql://student:secret123@localhost:5432/playground?schema=public
+Connected to PostgreSQL: [  
+  { version: 'PostgreSQL 17.6 (…) x86_64-pc-linux-gnu (…)' }  
+]</code></pre>
+            </div>
+            <p class="note-small">
+                上手く接続できなかった場合、3.5.Windowsでの競合と注意点を確認してください。
+            </p>
+            <p>
+                この表示は、Drizzle ORMがPostgreSQL（Docker内）へ接続し、SQL実行まで成功していることを示します。
+            </p>
+
+            <h3 data-prefix="3.5">Windowsでの競合と注意点</h3>
+            <p class="note-small">
+                この節は、<span class="inline-code">npx tsx src/setupDrizzle.ts</span>で接続がうまくいかなかった場合におけるトラブルシューティングのヒントを提供しています。<br>
+                上手くいった場合は、この節は読み飛ばして構いません。なお、この方法をとっても解決しない場合は、生成AIなどを活用して対応してください。
+            </p>
+            <p>
+                Windows上でDrizzle ORMのPostgreSQLへの接続が上手くいかなかった場合、以下のように<strong>ローカルOS側にもPostgreSQLサービスが起動しているか確認してください</strong>。
+                もし同じポート(5432)で他のPostgresサービスが動いていると、Node/Drizzleはそちらに接続してしまい、誤った認証エラーになることがあります。
+            </p>
+            <h4>確認方法（サービス一覧）</h4>
+            <ol>
+                <li><span class="inline-code">Windows+R</span>キーを押して<span class="inline-code">services.msc</span>と入力してサービス一覧を開く</li>
+                <li>サービス一覧の中で<span class="inline-code">PostgreSQL</span>を含むものを探す(例：<span class="inline-code">postgresql-x64-17</span>)</li>
+                <li>もし見つかったら<strong>停止</strong>しておく</li>
+                <li>再度<span class="inline-code">npx tsx src/setupDrizzle.ts</span>を実行して接続を確認する</li>
+            </ol>
+            <p>
+                このように競合を解消しておくことで、Docker内のPostgreSQLへの接続が成功する可能性が高まります。
+            </p>
+
+            <h3 data-prefix="3.6">確認テスト</h3>
+            <p>
+                <strong>問1 </strong>接続確認のテストでは、<span class="inline-code">db.execute("<span class="mask">SELECT</span> version()")</span>を使ってPostgreSQLのバージョン情報を取得しました。
+            </p>
+
+            <h3 data-prefix="3.7">参考文献</h3>
+            <ul>
+                <li><a href="https://orm.drizzle.team/docs/guides/postgresql-local-setup" target="_blank">
+                    Drizzle ORM - How to setup PostgreSQL locally
+                </a></li>
+                <li><a href="https://qiita.com/aloac/items/e265950bbc3ef4f9973f" target="_blank">
+                    DBクライアントからDockerコンテナのpostgresに接続できなかった時の原因 #PostgreSQL - Qiita
+                </a></li>
+            </ul>
+        </div>
+
+        <h2 data-prefix="4">例アプリのテーブル定義とCRUD</h2>
+        <div class="second_layer_content">
+            <h3 data-prefix="4.1">例アプリの概要</h3>
+            <p>
+                次は、Drizzle ORMの使い方を学ぶために例アプリを作成します。例アプリと言ってもUIなどアプリ画面まで作るわけではなく、CRUDの基本的な動作を確認するのみとなっています。<br>
+                今回作成する例アプリは、<strong>データベースにユーザー情報を保存・取得・更新・削除する基本的な機能を持ったシンプルなアプリケーション</strong>です。<br>
+            </p>
+            <ul>
+                <li><strong>Create</strong>：ユーザー情報を新規登録する</li>
+                <li><strong>Read</strong>：登録済みのユーザー情報を一覧・検索する</li>
+                <li><strong>Update</strong>：既存ユーザーの情報を変更する</li>
+                <li><strong>Delete</strong>：ユーザー情報を削除する</li>
+            </ul>
+            <p>
+                Drizzle ORMを用いることで、テーブル定義やSQLの実行を<strong>TypeScriptで書けるようになり、型安全かつ簡潔にデータベース操作が記述できます</strong>。また、今回作成するアプリは<strong>最小限の機能に留めているので、Drizzle ORMやPostgreSQLの基本を学ぶための導入として最適な題材です</strong>。
+            </p>
+
+            <h3 data-prefix="4.2">プロジェクトの全体構造と全体プログラム</h3>
+            <p>
+                以下のようなディレクトリ構造を想定します：
+            </p>
+            <div class="code-card">
+                <div class="code-header">
+                    <span class="code-title">プロジェクトのディレクトリ構造例</span>
+                </div>
+                <pre><code class="code-block">project-root
+├── src
+│   ├── db                    ← 例アプリ用フォルダ (追加)
+│   │   ├── schema.ts         ← テーブル定義 (追加)
+│   │   ├── app.ts            ← 全体アプリ入口 (追加)
+│   │   └── crud.ts           ← CRUD 操作をまとめたコード (追加)
+│   ├── libs
+│   ├── samples
+│   └── setupDrizzle.ts       ← 接続設定
+├── .env                      ← DATABASE_URL を設定
+├── drizzle.config.ts         ← Drizzle Kit の設定 (追加)
+├── package.json
+└── tsconfig.json</code></pre>
+            </div>
+            <p>
+                ここでは、<span class="inline-code">src/db</span>フォルダを新たに作成し、その中にテーブル定義やCRUD操作のコードを配置する形をとります。<br>
+                追加と書かれてあるファイルとフォルダをあらかじめ作成しておいてください（内容はこれから説明します）。<br>
+            </p>
+
+            <h3 data-prefix="4.3">テーブル定義（schema.ts）</h3>
+            <p>
+                まずは、ユーザー情報を保存するためのテーブルを定義します。Drizzle ORMでは、<span class="inline-code">pgTable</span>関数を用いてテーブル構造をTypeScriptで記述できます。
+            </p>
+            <p>
+                今回はテーブル名を<strong>drizzle_users</strong>とし、以下の3つのカラムを持たせます。
+            </p>
+            <ul>
+                <li><strong>id</strong>：主キー（自動採番）</li>
+                <li><strong>name</strong>：ユーザー名</li>
+                <li><strong>email</strong>：メールアドレス</li>
+            </ul>
+            <div class="code-card">
+                <div class="code-header">
+                    <span class="code-title">schema.ts</span>
+                    <button class="copy-btn" type="button">コピー</button>
+                </div>
+                <pre><code class="code-block">import { pgTable, serial, varchar } from "drizzle-orm/pg-core";
+
+export const drizzleUsers = pgTable("drizzle_users", {
+  id: serial("id").primaryKey(),
+  name: varchar("name", { length: 256 }).notNull(),
+  email: varchar("email", { length: 256 }).notNull(),
+});</code></pre>
+            </div>
+
+            <h3 data-prefix="4.4">Drizzle Kit の設定ファイルの作成 (drizzle.config.ts)</h3>
+            <p>
+                Drizzle ORMで<strong>マイグレーションを自動生成したり適用したりするためには、設定ファイルが必要です</strong>。
+                Drizzle Kitは<span class="inline-code">drizzle.config.ts</span>というファイルをルートに置き、ここに<strong>スキーマの場所や使用するデータベースの種類などを指定します</strong>。
+            </p>
+            <p>
+                プロジェクトのルート（package.jsonと同じ階層）に以下の内容のファイルを作成してください：
+            </p>
+            <div class="code-card">
+                <div class="code-header">
+                    <span class="code-title">drizzle.config.ts</span>
+                    <button class="copy-btn" type="button">コピー</button>
+                </div>
+                <pre><code class="code-block">import 'dotenv/config';
+import { defineConfig } from 'drizzle-kit';
+
+export default defineConfig({
+  schema: "./src/db/schema.ts",
+  dialect: "postgresql",
+  dbCredentials: {
+    url: process.env.DATABASE_URL!,
+  },
+});</code></pre>
+            </div>
+            <ul>
+                <li><strong>schema</strong>：Drizzle ORM のスキーマ定義ファイルへのパス</li>
+                <li><strong>dialect</strong>：利用するデータベースの種類（今回はPostgreSQL）</li>
+                <li><strong>dbCredentials.url</strong>：接続文字列（.envのDATABASE_URLを参照）</li>
+            </ul>
+
+            <h3 data-prefix="4.5">マイグレーションファイルの生成と適用</h3>
+            <p>
+                設定ファイルを作成したら、次のコマンドを順に実行することで、<strong>スキーマ定義に基づいたマイグレーションファイルが生成され、必要なテーブルがデータベースに追加されます</strong>。
+            </p>
+            <div class="code-card">
+                <div class="code-header">
+                    <span class="code-title">テーブル作成</span>
+                    <button class="copy-btn" type="button">コピー</button>
+                </div>
+                <pre><code class="code-block">npx drizzle-kit generate --name=init
+npx drizzle-kit migrate</code></pre>
+            </div>
+            <ul>
+                <li><span class="inline-code">generate</span>：スキーマの変更点からSQLマイグレーションを自動生成します。</li>
+                <li><span class="inline-code">migrate</span>：生成されたマイグレーションをDBに適用します。</li>
+            </ul>
+            <p class="note-small">※注意：<span class="inline-code">drizzle-kit push</span>でもマイグレーションを行えますが、既存テーブルとの整合性を保つためには<span class="inline-code">generate → migrate</span>の方が安全です。</p>
+
+            <h3 data-prefix="4.6">CRUD操作の実装（crud.ts）</h3>
+            <p>
+                次に、CRUD（Create/Read/Update/Delete）を実装します。
+                Drizzle ORMでは、条件式に<span class="inline-code">eq()</span>などの演算子関数を使用します。(PostgreSQLの = に相当)
+                カラムに直接<span class="inline-code">.eq()</span>を呼び出す形式ではない点に注意してください。
+            </p>
+            <div class="code-card">
+                <div class="code-header">
+                    <span class="code-title">crud.ts</span>
+                    <button class="copy-btn" type="button">コピー</button>
+                </div>
+                <pre><code class="code-block">import { eq } from "drizzle-orm";
+import { db as defaultDb } from "../setupDrizzle";
+import { drizzleUsers } from "./schema";
+
+export function createUser(
+  name: string,
+  email: string,
+  opt: { db?: any } = {}
+) {
+  const d = opt.db ?? defaultDb;
+  return d.insert(drizzleUsers).values({ name, email });
+}
+
+export function getAllUsers(opt: { db?: any } = {}) {
+  const d = opt.db ?? defaultDb;
+  return d.select().from(drizzleUsers);
+}
+
+export function updateUserEmail(
+  id: number,
+  newEmail: string,
+  opt: { db?: any } = {}
+) {
+  const d = opt.db ?? defaultDb;
+  return d
+    .update(drizzleUsers)
+    .set({ email: newEmail })
+    .where(eq(drizzleUsers.id, id));
+}
+
+export function deleteUser(id: number, opt: { db?: any } = {}) {
+  const d = opt.db ?? defaultDb;
+  return d
+    .delete(drizzleUsers)
+    .where(eq(drizzleUsers.id, id));
+}</code></pre>
+            </div>
+            <p>
+                この実装では、通常の<span class="inline-code">db</span>だけでなく、トランザクション用の<span class="inline-code">tx</span>も渡せるように設計しています。
+                これにより、後述するトランザクション処理でも同じCRUD関数を利用できます。
+            </p>
+
+            <h3 data-prefix="4.7">アプリ全体の実行（app.ts）</h3>
+            <p>
+                次に、CRUD処理をまとめて実行するアプリ本体を作成します。
+                ここではトランザクションを開始し、最後に明示的にrollbackを実行して動作確認を行います。
+            </p>
+            <div class="code-card">
+                <div class="code-header">
+                    <span class="code-title">app.ts</span>
+                    <button class="copy-btn" type="button">コピー</button>
+                </div>
+                <pre><code class="code-block">import { db } from "../setupDrizzle";
+import {
+  createUser,
+  getAllUsers,
+  updateUserEmail,
+  deleteUser,
+} from "./crud";
+
+async function main() {
+  try {
+    await db.transaction(async (tx) => {
+      console.log("=== Transaction Start ===");
+
+      await createUser("Tanaka Ichiro", "ichiro@example.com", { db: tx });
+      console.log("After create:", await getAllUsers({ db: tx }));
+
+      const users = await getAllUsers({ db: tx });
+      console.log("Read check:", users);
+
+      if (users.length > 0) {
+        const id = users[0].id;
+        await updateUserEmail(id, "taro.new@example.com", { db: tx });
+      }
+      console.log("After update:", await getAllUsers({ db: tx }));
+
+      if (users.length > 0) {
+        const id = users[0].id;
+        await deleteUser(id, { db: tx });
+      }
+      console.log("After delete:", await getAllUsers({ db: tx }));
+
+      console.log("=== Forcing Rollback ===");
+      tx.rollback();
+    });
+  } catch (e: any) {
+    if (e?.message === "Rollback") {
+      console.log("Transaction was rolled back successfully.");
+    } else {
+      console.error("Unexpected error:", e);
+    }
+  }
+
+  console.log("=== After Transaction (Outside) ===");
+  console.log("Final DB state:", await getAllUsers());
+}
+
+main();</code></pre>
+            </div>
+
+            <h3 data-prefix="4.8">トランザクションとRollbackの確認</h3>
+            <p>
+                Drizzle ORMでは、<span class="inline-code">db.transaction()</span>内で例外が発生すると自動的にrollbackされます。
+                また、<span class="inline-code">tx.rollback()</span>を明示的に呼び出すことでもロールバック可能です。
+            </p>
+            <p>
+                ただし、PostgreSQLの仕様上、<strong>シーケンス（serial）の値はrollbackされません</strong>。
+                そのため、IDが途中で飛ぶように見えることがありますが、これは正常な挙動です。
+            </p>
+            <ul>
+                <li>INSERT → rollback → データは消える</li>
+                <li>しかし nextval()は戻らないためIDは進む</li>
+            </ul>
+
+            <h3 data-prefix="4.9">実行方法</h3>
+            <p>
+                以下のコマンドで実行できます。
+            </p>
+            <div class="code-card">
+                <div class="code-header">
+                    <span class="code-title">アプリの実行コマンド</span>
+                    <button class="copy-btn" type="button">コピー</button>
+                </div>
+                <pre><code class="code-block">npx tsx src/db/app.ts</code></pre>
+            </div>
+            <p>
+                ログに「Transaction was rolled back successfully.」と表示され、
+                トランザクション外で確認したデータが元の状態に戻っていれば成功です。
+            </p>
+            <p>
+                以上で、Drizzle ORMを用いたテーブル定義およびCRUD操作、
+                さらにトランザクション制御まで含めた基本的な例アプリが完成しました。
+                これらの構造は実際のWebアプリケーション開発でもほぼ同じ形で利用されます。
+            </p>
+
+            <h3 data-prefix="4.10">Create 操作の解説</h3>
+            <p>
+                ここでは<span class="inline-code">crud.ts</span>の<span class="inline-code">createUser</span>関数を例に、INSERT操作を確認します。
+            </p>
+            <div class="code-card">
+                <div class="code-header">
+                    <span class="code-title">createUser関数</span>
+                </div>
+                <pre><code class="code-block">export function createUser(
+  name: string,
+  email: string,
+  opt: { db?: any } = {}
+) {
+  const d = opt.db ?? defaultDb;
+  return d.insert(drizzleUsers).values({ name, email });
+}</code></pre>
+            </div>
+            <p>
+                中でも、<span class="inline-code">d.insert(drizzleUsers).values({ name, email })</span>の部分が、Drizzle ORMでのINSERT操作の核心です。<br>
+                この処理は、PostgreSQLでは次のSQLに相当します。
+            </p>
+            <div class="code-card">
+                <div class="code-header">
+                    <span class="code-title">createUser関数に対応するSQL</span>
+                </div>
+                <pre><code class="code-block">INSERT INTO drizzle_users (name, email)
+VALUES ('Tanaka Ichiro', 'ichiro@example.com'); -- 値はapp.tsにて引数で渡されたnameとemail</code></pre>
+            </div>
+            <p>
+                Drizzleでは<span class="inline-code">.insert()</span>にテーブルオブジェクトを渡し、<span class="inline-code">.values()</span>にオブジェクト形式で値を指定します。
+            </p>
+            <h4>テーブル定義と型安全性</h4>
+            <p>
+                <span class="inline-code">drizzleUsers</span>は<span class="inline-code">schema.ts</span>で定義したテーブルオブジェクトです。<br>
+                <strong>drizzleUsersに基づいて型が自動推論されるため</strong>、
+            </p>
+            <ul>
+                <li>存在しないカラム名を指定するとコンパイルエラー</li>
+                <li>型不一致もコンパイル時に検出</li>
+            </ul>
+            <p>というメリットがあります。</p>
+            <h4>opt.dbの設計意図</h4>
+            <p>
+                <span class="inline-code">const d = opt.db ?? defaultDb;</span>は、
+            </p>
+            <ul>
+                <li>通常実行 → <span class="inline-code">defaultDb</span></li>
+                <li>トランザクション内 → <span class="inline-code">tx</span></li>
+            </ul>
+            <p>
+                のどちらにも対応できる設計です。<br>
+                つまり<strong>CRUD関数自体はトランザクションの存在を意識しない設計</strong>になっています。
+            </p>
+
+            <h3 data-prefix="4.11">Read 操作の解説</h3>
+            <p>
+                次に、<span class="inline-code">crud.ts</span>の<span class="inline-code">getAllUsers</span>関数を例に、SELECT操作を確認します。
+            </p>
+            <div class="code-card">
+                <div class="code-header">
+                    <span class="code-title">getAllUsers関数</span>
+                </div>
+                <pre><code class="code-block">export function getAllUsers(opt: { db?: any } = {}) {
+  const d = opt.db ?? defaultDb;
+  return d.select().from(drizzleUsers);
+}</code></pre>
+            </div>
+            <p>
+                中でも、<span class="inline-code">d.select().from(drizzleUsers)</span>の部分が、Drizzle ORMでのSELECT操作の核心です。<br>
+                この処理は、PostgreSQLでは次のSQLに相当します。
+            </p>
+            <div class="code-card">
+                <div class="code-header">
+                    <span class="code-title">getAllUsers関数に対応するSQL</span>
+                </div>
+                <pre><code class="code-block">SELECT * FROM drizzle_users;</code></pre>
+            </div>
+            <p>
+                Drizzleの<span class="inline-code">select()</span>は「ビルダー方式」です。
+            </p>
+            <ul>
+                <li><span class="inline-code">.select()</span> → SELECT 開始</li>
+                <li><span class="inline-code">.from(drizzleUsers)</span> → FROM 句</li>
+                <li><span class="inline-code">.where()</span> → WHERE 句</li>
+                <li><span class="inline-code">.orderBy()</span> → ORDER BY 句</li>
+            </ul>
+            <p>
+                という流れで<strong>SQLの構造とほぼ1対1対応</strong>しています。<br>
+            </p>
+            <h4>取得結果の型</h4>
+            <p>
+                返り値は次のような配列になります：
+            </p>
+            <div class="code-card">
+                <div class="code-header">
+                    <span class="code-title">getAllUsersの返り値の型例</span>
+                </div>
+                <pre><code class="code-block">{
+  id: number;
+  name: string;
+  email: string;
+}[]</code></pre>
+            </div>
+            <p>
+                これもschema定義から自動推論されます。
+            </p>
+
+            <h3 data-prefix="4.12">Update 操作の解説</h3>
+            <p>
+                次に、<span class="inline-code">crud.ts</span>の<span class="inline-code">updateUserEmail</span>関数を例に、UPDATE操作を確認します。
+            </p>
+            <div class="code-card">
+                <div class="code-header">
+                    <span class="code-title">updateUserEmail関数</span>
+                </div>
+                <pre><code class="code-block">export function updateUserEmail(
+  id: number,
+  newEmail: string,
+  opt: { db?: any } = {}
+) {
+  const d = opt.db ?? defaultDb;
+  return d
+    .update(drizzleUsers)
+    .set({ email: newEmail })
+    .where(eq(drizzleUsers.id, id));
+}</code></pre>
+            </div>
+            <p>
+                中でも、<span class="inline-code">d.update(drizzleUsers).set({ email: newEmail }).where(eq(drizzleUsers.id, id))</span>の部分が、Drizzle ORMでのUPDATE操作の核心です。<br>
+                この処理は、PostgreSQLでは次のSQLに相当します。
+            </p>
+            <div class="code-card">
+                <div class="code-header">
+                    <span class="code-title">updateUserEmail関数に対応するSQL</span>
+                </div>
+                <pre><code class="code-block">UPDATE drizzle_users
+SET email = 'taro.new@example.com'
+WHERE id = 1; -- 1はapp.tsにて引数で渡されたid</code></pre>
+            </div>
+            <p>
+                <span class="inline-code">.set({ email: newEmail })</span>で、
+            </p>
+            <ul>
+                <li>存在しないカラム名を指定するとエラー</li>
+                <li>型が違えばコンパイルエラー</li>
+            </ul>
+            <p>
+                となります。<br>
+                つまり、<strong>UPDATE文も型安全</strong>です。
+            </p>
+
+            <h3 data-prefix="4.13">Delete 操作の解説</h3>
+            <p>
+                最後に、<span class="inline-code">crud.ts</span>の<span class="inline-code">deleteUser</span>関数を例に、DELETE操作を確認します。
+            </p>
+            <div class="code-card">
+                <div class="code-header">
+                    <span class="code-title">deleteUser関数</span>
+                </div>
+                <pre><code class="code-block">export function deleteUser(id: number, opt: { db?: any } = {}) {
+  const d = opt.db ?? defaultDb;
+  return d
+    .delete(drizzleUsers)
+    .where(eq(drizzleUsers.id, id));
+}</code></pre>
+            </div>
+            <p>
+                中でも、<span class="inline-code">d.delete(drizzleUsers).where(eq(drizzleUsers.id, id))</span>の部分が、Drizzle ORMでのDELETE操作の核心です。<br>
+                この処理は、PostgreSQLでは次のSQLに相当します。
+            </p>
+            <div class="code-card">
+                <div class="code-header">
+                    <span class="code-title">deleteUser関数に対応するSQL</span>
+                </div>
+                <pre><code class="code-block">DELETE FROM drizzle_users
+WHERE id = 1; -- 1はapp.tsにて引数で渡されたid</code></pre>
+            </div>
+            <p>
+                PostgreSQLを触ったことがある読者ならご存知の通り、<span class="inline-code">DELETE FROM drizzle_users;</span>は全件削除になります。<br>
+                Drizzleでも同様で、<span class="inline-code">d.delete(drizzleUsers);</span>は全件削除になります。<br>
+                Drizzleは安全ですが、<strong>ロジックミスまでは防いでくれません</strong>。
+            </p>
+
+            <h3 data-prefix="4.14">CRUD 実装の設計思想まとめ</h3>
+            <p>
+                今回のCRUD実装には、いくつか重要な設計ポイントがあります。
+            </p>
+            <h4>SQLと1対1対応する構文</h4>
+            <p>
+                Drizzleは「ORMでありながらSQLに非常に近い構造」を持っています。
+            </p>
+            <ul>
+                <li>insert → INSERT</li>
+                <li>select → SELECT</li>
+                <li>update → UPDATE</li>
+                <li>delete → DELETE</li>
+            </ul>
+            <p>
+                そのため、PostgreSQLを理解している読者であれば違和感なく読めます。
+            </p>
+            <h4>型安全性</h4>
+            <p>
+                最大のメリットは、
+            </p>
+            <ul>
+                <li>カラム名の typo を防げる</li>
+                <li>型不一致をコンパイル時に検出できる</li>
+                <li>取得結果の型が自動推論される</li>
+            </ul>
+            <p>
+                という点です。
+            </p>
+            <h4>トランザクション対応設計</h4>
+            <p>
+                <span class="inline-code">opt.db</span>パターンにより、
+            </p>
+            <ul>
+                <li>通常実行</li>
+                <li>トランザクション内実行</li>
+            </ul>
+            <p>
+                の両方を同一関数で扱えます。<br>
+                これは実務レベルでもよく使われる設計です。
+            </p>
+
+            <h3 data-prefix="4.15">確認テスト</h3>
+            <p>
+                <strong>問1 </strong>Drizzle ORMにおけるINSERT操作は<span class="inline-code">d.insert(drizzleUsers).<span class="mask">values</span>({ name, email });</span>のように記述します。
+            </p>
+            <p>
+                <strong>問2 </strong>Drizzle ORMではSELECT操作を行う際に<span class="inline-code">.select()</span> → <span class="inline-code">.from()</span>のような<span class="mask">ビルダー</span>方式で記述します。
+            </p>
+            <p>
+                <strong>問3 </strong><span class="inline-code">opt.db</span>の設計意図は、通常実行と<span class="mask">トランザクション</span>内実行の両方で同じCRUD関数を利用することにあります。
+            </p>
+            <p>
+                <strong>問4 </strong>.where(eq(drizzleUsers.id, id))のeqはDrizzleの<span class="mask">比較演算子</span>です。
+            </p>
+            <p>
+                <strong>問5 </strong><span class="inline-code">d.update(drizzleUsers).set({ email: newEmail }).where(eq(drizzleUsers.id, id))</span>でDrizzleが発行するSQLはどれになりますか？<br>
+                A. DELETE FROM drizzle_users;<br>
+                B. UPDATE drizzle_users SET email = newEmail WHERE id = 1;<br>
+                C. INSERT INTO drizzle_users (name, email) VALUES (newName, newEmail);<br>
+                D. SELECT * FROM drizzle_users;
+            </p>
+            <p>
+                <strong>答</strong>：<span class="mask">B</span>
+            </p>
+            <p>
+                <strong>問6 </strong>次のうちDrizzle ORMの特徴として正しいものはどれですか？<br>
+                A. SELECTのみ対応している<br>
+                B. SQLを完全に隠蔽している<br>
+                C. SQLに近い構文で書ける<br>
+                D. 型安全性がない<br>
+            </p>
+            <p>
+                <strong>答</strong>：<span class="mask">C</span>
+            </p>
+
+            <h3 data-prefix="4.16">参考文献</h3>
+            <ul>
+                <li><a href="https://orm.drizzle.team/docs/insert" target="_blank">
+                    Drizzle ORM - Insert
+                </a></li>
+                <li><a href="https://orm.drizzle.team/docs/get-started/postgresql-existing" target="_blank">
+                    Drizzle ORM - PostgreSQL
+                </a></li>
+                <li><a href="https://orm.drizzle.team/docs/update" target="_blank">
+                    Drizzle ORM - Update
+                </a></li>
+            </ul>
+        </div>
+
+        <h2 data-prefix="5"></h2>
+        <div class="second_layer_content">
+            
+        </div>
+    </div>
+    <script type="text/javascript" src="script.js"></script>
+</body>
+</html>
