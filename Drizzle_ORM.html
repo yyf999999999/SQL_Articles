@@ -4,10 +4,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="stylesheet" href="main.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/github-dark.min.css">
     <title>Drizzle ORMで学ぶSQLの実行性能</title>
 </head>
 <body>
     <div class="first_layer_content">
+        <a href="https://yyf999999999.github.io/newPortfolio/" target="_blank">ポートフォリオ</a>
         <h1>Drizzle ORMで学ぶSQLの実行性能</h1>
 
         <h2 data-prefix="1">はじめに</h2>
@@ -62,13 +64,12 @@
                 本教材は、Drizzle ORMの導入から始まり、最終的にPostgreSQLの実行計画の分析へと進む構成になっています。
             </p>
             <ul>
-                <li><strong>第2章</strong>：ORMの概要とDrizzle ORM</li>
-                <li><strong>第3章</strong>：Drizzle ORMの導入とPostgreSQL接続</li>
-                <li><strong>第4章</strong>：例アプリのテーブル定義とCRUD実装</li>
-                <li><strong>第5章</strong>：インデックスの有無による検索性能の違い</li>
-                <li><strong>第6章</strong>：JOINを含むクエリの実行計画分析</li>
-                <li><strong>第7章</strong>：ORM利用時の性能設計上のポイント</li>
-                <li><strong>第8章</strong>：演習問題と総合確認</li>
+                <li><strong>第2章</strong>：ORMの概要とDrizzle ORMの特徴</li>
+                <li><strong>第3章</strong>：Drizzle ORMの導入とPostgreSQLへの接続</li>
+                <li><strong>第4章</strong>：例アプリのテーブル定義とCRUD</li>
+                <li><strong>第5章</strong>：インデックスと実行計画</li>
+                <li><strong>第6章</strong>：JOINを含むクエリと実行計画</li>
+                <li><strong>第7章</strong>：集約処理（GROUP BY）と実行計画</li>
             </ul>
             <p>
                 これらを通して、読者が<strong>「アプリケーション側の利便性」と「データベース内部の仕組み」を結びつけて理解できるようになること</strong>を目指します。
@@ -958,11 +959,594 @@ WHERE id = 1; -- 1はapp.tsにて引数で渡されたid</code></pre>
             </ul>
         </div>
 
-        <h2 data-prefix="5"></h2>
+        <h2 data-prefix="5">インデックスと実行計画</h2>
         <div class="second_layer_content">
-            
+            <h3 data-prefix="5.1">本章の目的</h3>
+            <p>
+                第4章ではCRUDとトランザクションを確認しました。  
+                本章ではインデックスの有無による検索性能の違いを、Drizzle ORMのコードから直接確認します。
+            </p>
+            <p>
+                Drizzle ORMはTypeScriptからSQLを生成し、PostgreSQLに送信しますが、どの実行計画を使うか（Seq ScanやIndex Scanなど）の選択はPostgreSQL側が行います。
+            </p>
+
+            <h3 data-prefix="5.2">検証用データの投入コード</h3>
+            <p>
+                大量データの投入と既存データ削除を行う<span class="inline-code">src/db/seed.ts</span>を作成します。
+            </p>
+
+            <div class="code-card">
+                <div class="code-header">
+                    <span class="code-title">src/db/seed.ts</span>
+                    <button class="copy-btn" type="button">コピー</button>
+                </div>
+                <pre><code class="code-block">import { db } from "../setupDrizzle";
+import { drizzleUsers } from "./schema";
+import { sql } from "drizzle-orm";
+
+async function seed() {
+  console.log("Start seeding...");
+
+  // 既存データを全削除（高速）
+  await db.execute(sql`TRUNCATE TABLE drizzle_users RESTART IDENTITY`);
+
+  const users = [];
+  for (let i = 0; i < 10000; i++) {
+    users.push({
+      name: `User${i}`,
+      email: `user${i}@example.com`,
+    });
+  }
+
+  await db.insert(drizzleUsers).values(users);
+
+  console.log("Seed completed");
+}
+
+seed();</code></pre>
+            </div>
+
+            <div class="code-card">
+                <div class="code-header">
+                    <span class="code-title">seed実行</span>
+                    <button class="copy-btn" type="button">コピー</button>
+                </div>
+                <pre><code class="code-block">npx tsx src/db/seed.ts</code></pre>
+            </div>
+
+            <p class="note-small">
+                ※注意：大量データの挿入には数秒〜数十秒程度かかることがあります。処理が完了するまでお待ちください。
+            </p>
+
+            <h3 data-prefix="5.3">実行計画をコードから出力する</h3>
+            <p>
+                インデックスなし/ありの実行計画をDrizzle ORMのコードから取得して出力する<span class="inline-code">src/db/explainIndex.ts</span>を作成します。
+            </p>
+
+            <div class="code-card">
+                <div class="code-header">
+                    <span class="code-title">src/db/explainIndex.ts</span>
+                    <button class="copy-btn" type="button">コピー</button>
+                </div>
+                <pre><code class="code-block">import { db } from "../setupDrizzle";
+
+async function dropIndex() {
+  console.log("=== Drop Existing Index (if any) ===");
+  await db.execute(`
+    DROP INDEX IF EXISTS idx_drizzle_users_email;
+  `);
+}
+
+async function explainWithoutIndex() {
+  console.log("=== Explain Without Index ===");
+  const result = await db.execute(`
+    EXPLAIN ANALYZE
+    SELECT * FROM drizzle_users
+    WHERE email = 'user5000@example.com';
+  `);
+  console.log(result.rows);
+}
+
+async function createIndex() {
+  console.log("=== Create Index ===");
+  await db.execute(`
+    CREATE INDEX idx_drizzle_users_email
+    ON drizzle_users(email);
+  `);
+}
+
+async function explainWithIndex() {
+  console.log("=== Explain With Index ===");
+  const result = await db.execute(`
+    EXPLAIN ANALYZE
+    SELECT * FROM drizzle_users
+    WHERE email = 'user5000@example.com';
+  `);
+  console.log(result.rows);
+}
+
+async function main() {
+  await dropIndex();
+  await explainWithoutIndex();
+  await createIndex();
+  await explainWithIndex();
+}
+
+main().catch(console.error);</code></pre>
+            </div>
+
+            <p>
+                このスクリプトを実行すると次の3つの実行計画が出力されます。
+            </p>
+            <ul>
+                <li>インデックスなしの検索（Seq Scanを含む実行計画）</li>
+                <li>インデックスの作成</li>
+                <li>インデックスありの検索（Index Scanを含む実行計画）</li>
+            </ul>
+
+            <div class="code-card">
+                <div class="code-header">
+                    <span class="code-title">explainIndex実行</span>
+                    <button class="copy-btn" type="button">コピー</button>
+                </div>
+                <pre><code class="code-block">npx tsx src/db/explainIndex.ts</code></pre>
+            </div>
+
+            <h3 data-prefix="5.4">実行計画の出力について</h3>
+            <p>
+                上記の実行では次の順に結果が出力されます。
+            </p>
+            <ul>
+                <li><strong>Explain Without Index</strong>：インデックスなしの検索でSeq Scanが使われる</li>
+                <li><strong>Create Index</strong>：インデックスを作成する</li>
+                <li><strong>Explain With Index</strong>：インデックスありの検索でIndex Scanが使われる</li>
+            </ul>
+            <p>
+                実行計画の出力を比較することで、インデックスによって検索方法が変わり、処理効率が改善することが確認できます。
+            </p>
+
+            <h3 data-prefix="5.5">インデックス操作と走査方法の原理</h3>
+            <p>
+                PostgreSQLではテーブルに値を検索する際、いくつかの探索方法があります。  
+                ここではインデックスなし・ありの場合の基本的な仕組みを説明します。
+            </p>
+            <p>
+                <strong>Seq Scan</strong>はテーブル全体を先頭から最後まで順番に読み出して条件に合う行を探す方法です。  
+                この方式はインデックスがない場合やテーブルが小さい場合に利用されますが、テーブルサイズが大きい場合に読み取り量が多くなるため時間がかかることがあります。
+            </p>
+            <p>
+                <strong>Index Scan</strong>は先にインデックスをたどって、条件に該当する行の位置を高速に絞り込みます。  
+                インデックスを使うことで必要な行だけを効率的に読み出すことができるため、大量データの検索が高速になります。  
+                ただしインデックスの更新や作成には追加のコストがかかります。
+            </p>
+
+            <h3 data-prefix="5.6">確認テスト</h3>
+            <p><strong>問1 </strong>インデックスなしの実行計画は<span class="mask">Seq Scan</span>です。</p>
+            <p><strong>問2 </strong>インデックスありの実行計画は<span class="mask">Index Scan</span>です。</p>
+            <p><strong>問3 </strong>インデックスは検索を<span class="mask">高速化</span>します。</p>
+
+            <h3 data-prefix="5.7">参考文献</h3>
+            <ul>
+                <li><a href="https://www.postgresql.org/docs/current/using-explain.html" target="_blank">
+                    PostgreSQL公式ドキュメント - EXPLAIN
+                </a></li>
+                <li><a href="https://www.postgresql.org/docs/current/indexes.html" target="_blank">
+                    PostgreSQL公式ドキュメント - Indexes
+                </a></li>
+            </ul>
         </div>
+
+        <h2 data-prefix="6">JOIN を含むクエリと実行計画</h2>
+        <div class="second_layer_content">
+
+            <h3 data-prefix="6.1">章の概要</h3>
+            <p>
+                ここでは、複数テーブルを結合するクエリ（JOIN）をDrizzle ORMで書き、  
+                実際に発行されるSQLをPostgreSQLで実行して<strong>実行計画の違いを比較</strong>します。<br>
+                JOINは単一テーブルのCRUDに比べて性能への影響が大きいため、  
+                実行計画の理解がより重要になります。
+            </p>
+
+            <h3 data-prefix="6.2">schema.ts の最終版ファイル</h3>
+            <p>
+                この章で使用するJOIN用テーブル定義を含め、完全版の<span class="inline-code">src/db/schema.ts</span>を以下に示します。
+            </p>
+
+            <div class="code-card">
+                <div class="code-header">
+                    <span class="code-title">src/db/schema.ts</span>
+                    <button class="copy-btn" type="button">コピー</button>
+                </div>
+                <pre><code class="code-block">import { pgTable, serial, varchar, integer } from "drizzle-orm/pg-core";
+
+// ユーザー情報テーブル
+export const drizzleUsers = pgTable("drizzle_users", {
+  id: serial("id").primaryKey(),
+  name: varchar("name", { length: 256 }).notNull(),
+  email: varchar("email", { length: 256 }).notNull(),
+});
+
+// グループ情報テーブル
+export const drizzleGroups = pgTable("drizzle_groups", {
+  id: serial("id").primaryKey(),
+  group_name: varchar("group_name", { length: 256 }).notNull(),
+});
+
+// ユーザーとグループの関連テーブル
+export const drizzleUserGroups = pgTable("drizzle_user_groups", {
+  id: serial("id").primaryKey(),
+  user_id: integer("user_id").notNull(),
+  group_id: integer("group_id").notNull(),
+});</code></pre>
+            </div>
+
+            <p>
+                追加したテーブルは以下の通りです：  
+                <strong>drizzle_groups</strong>（グループ情報）、  
+                <strong>drizzle_user_groups</strong>（ユーザーとグループの紐づけ）です。<br>
+                この定義を元にマイグレーションを生成・適用してください。
+            </p>
+
+            <h3 data-prefix="6.3">マイグレーションの生成と適用</h3>
+            <p>
+                `schema.ts`の編集内容をDBに反映するため、マイグレーションを生成し、PostgreSQLに適用します。
+            </p>
+            <div class="code-card">
+                <div class="code-header">
+                    <span class="code-title">マイグレーション生成</span>
+                    <button class="copy-btn" type="button">コピー</button>
+                </div>
+                <pre><code class="code-block">npx drizzle-kit generate --name=add_join_tables</code></pre>
+            </div>
+            <div class="code-card">
+                <div class="code-header">
+                    <span class="code-title">マイグレーション適用</span>
+                    <button class="copy-btn" type="button">コピー</button>
+                </div>
+                <pre><code class="code-block">npx drizzle-kit migrate</code></pre>
+            </div>
+
+            <h3 data-prefix="6.4">JOIN用データの投入（seedJoin.ts）</h3>
+            <p>
+                JOINのパフォーマンスを確認するために、JOIN対象のテーブルにデータを投入します。  
+                以下のシンプルなスクリプトを実行してください。
+            </p>
+
+            <div class="code-card">
+                <div class="code-header">
+                    <span class="code-title">src/db/seedJoin.ts</span>
+                    <button class="copy-btn" type="button">コピー</button>
+                </div>
+                <pre><code class="code-block">import { db } from "../setupDrizzle";
+import { drizzleUsers, drizzleGroups, drizzleUserGroups } from "./schema";
+import { sql } from "drizzle-orm";
+
+export async function seedJoinData() {
+  console.log("Start seeding join data...");
+
+  await db.execute(sql`
+    TRUNCATE TABLE drizzle_user_groups RESTART IDENTITY
+  `);
+  await db.execute(sql`
+    TRUNCATE TABLE drizzle_groups RESTART IDENTITY
+  `);
+  await db.execute(sql`
+    TRUNCATE TABLE drizzle_users RESTART IDENTITY
+  `);
+
+  const users = [];
+  for (let i = 1; i <= 1000; i++) {
+    users.push({ name: `User${i}`, email: `user${i}@example.com` });
+  }
+  await db.insert(drizzleUsers).values(users);
+
+  const groups = [];
+  for (let i = 1; i <= 50; i++) {
+    groups.push({ group_name: `Group${i}` });
+  }
+  await db.insert(drizzleGroups).values(groups);
+
+  const userGroups = [];
+  for (let i = 1; i <= 1000; i++) {
+    const groupId = ((i - 1) % 50) + 1;
+    userGroups.push({ user_id: i, group_id: groupId });
+  }
+  await db.insert(drizzleUserGroups).values(userGroups);
+
+  console.log("Join seed completed");
+}
+
+seedJoinData().catch(console.error);</code></pre>
+            </div>
+            <p>
+                次のコマンドで実行できます：
+            </p>
+            <div class="code-card">
+                <div class="code-header">
+                    <span class="code-title">JOIN用データ投入コマンド</span>
+                    <button class="copy-btn" type="button">コピー</button>
+                </div>
+                <pre><code class="code-block">npx tsx src/db/seedJoin.ts</code></pre>
+            </div>
+
+            <h3 data-prefix="6.5">実行計画比較コード（explainJoin.ts）</h3>
+            <p>
+                次に、JOINクエリの実行計画を比較するためのコードです。  
+                インデックスなし → インデックスありの順で表示します。
+            </p>
+
+            <div class="code-card">
+                <div class="code-header">
+                    <span class="code-title">src/db/explainJoin.ts</span>
+                    <button class="copy-btn" type="button">コピー</button>
+                </div>
+                <pre><code class="code-block">import { db } from "../setupDrizzle";
+
+export async function dropJoinIndexes() {
+  await db.execute(`DROP INDEX IF EXISTS idx_user_groups_user_id`);
+  await db.execute(`DROP INDEX IF EXISTS idx_user_groups_group_id`);
+}
+
+export async function explainJoinWithoutIndexes() {
+  console.log("=== Explain Without Indexes ===");
+  const result = await db.execute(`
+    EXPLAIN ANALYZE
+    SELECT u.id, u.name, g.group_name
+    FROM drizzle_users u
+    JOIN drizzle_user_groups ug ON u.id = ug.user_id
+    JOIN drizzle_groups g ON g.id = ug.group_id
+    WHERE g.group_name = 'Group10';
+  `);
+  console.log(result.rows);
+}
+
+export async function createJoinIndexes() {
+  console.log("=== Create Join Indexes ===");
+  await db.execute(`CREATE INDEX idx_user_groups_user_id ON drizzle_user_groups(user_id)`);
+  await db.execute(`CREATE INDEX idx_user_groups_group_id ON drizzle_user_groups(group_id)`);
+}
+
+export async function explainJoinWithIndexes() {
+  console.log("=== Explain With Indexes ===");
+  const result = await db.execute(`
+    EXPLAIN ANALYZE
+    SELECT u.id, u.name, g.group_name
+    FROM drizzle_users u
+    JOIN drizzle_user_groups ug ON u.id = ug.user_id
+    JOIN drizzle_groups g ON g.id = ug.group_id
+    WHERE g.group_name = 'Group10';
+  `);
+  console.log(result.rows);
+}
+
+export async function runExplainJoin() {
+  await dropJoinIndexes();
+  await explainJoinWithoutIndexes();
+  await createJoinIndexes();
+  await explainJoinWithIndexes();
+}
+
+runExplainJoin().catch(console.error);</code></pre>
+            </div>
+
+            <p>
+                次のコマンドで実行できます：
+            </p>
+            <div class="code-card">
+                <div class="code-header">
+                    <span class="code-title">実行計画比較実行コマンド</span>
+                    <button class="copy-btn" type="button">コピー</button>
+                </div>
+                <pre><code class="code-block">npx tsx src/db/explainJoin.ts</code></pre>
+            </div>
+
+            <h3 data-prefix="6.6">JOINにおける実行計画のポイント</h3>
+            <p>
+                JOINクエリでは複数のテーブルが結合されるため、結合キーのインデックスが性能に強く影響します。<br>
+                以下に代表的な違いをまとめます。
+            </p>
+            <ul>
+                <li><strong>インデックスなし</strong>：PostgreSQLは結合条件に対してSeq Scanを使い、全件を読みながら結合結果を探します。</li>
+                <li><strong>インデックスあり</strong>：インデックスを使って一致する行を効率的に絞り込み、結合処理を高速化できます。</li>
+            </ul>
+
+            <h3 data-prefix="6.7">実行計画（簡単な解説）</h3>
+            <p>
+                PostgreSQLはEXPLAIN ANALYZEの結果から、どの方式で結合を行うかを決定します。<br>
+                主に以下のような探索方法があります：
+            </p>
+            <ul>
+                <li><strong>Seq Scan</strong>：テーブル全体を順番に読み出す方式</li>
+                <li><strong>Index Scan</strong>：インデックスを使って一致する行を効率的に読み出す方式</li>
+                <li><strong>Bitmap Index Scan</strong>：複数条件を効率的に扱う方式</li>
+            </ul>
+            <p>
+                この違いがExplainの結果として現れ、性能差として実行時間にも反映されます。
+            </p>
+
+            <h3 data-prefix="6.8">確認テスト</h3>
+            <p>
+                <strong>問1 </strong>PostgreSQLでは、インデックス検索で該当する行がある程度多い場合、複数の行位置をまとめて取得する<span class="mask">Bitmap Index Scan</span>が選択されることがあります。
+            </p>
+            <p>
+                <strong>問2 </strong>次のうち、JOINクエリで結合順序や結合方法が実行計画に影響する要素として正しいものはどれですか？<br>
+                A. 結合するテーブルの行数だけ<br>
+                B. 結合キーにあるインデックスの有無<br>
+                C. 関連しないテーブルを含むかどうか<br>
+                D. 実行前のSQLコメントの有無
+            </p>
+            <p>
+                <strong>答</strong>：<span class="mask">B</span>
+            </p>
+
+            <h3 data-prefix="6.9">参考文献</h3>
+            <ul>
+                <li><a href="https://www.postgresql.org/docs/current/using-explain.html" target="_blank">PostgreSQL公式ドキュメント - EXPLAIN</a></li>
+                <li><a href="https://www.postgresql.org/docs/current/indexes.html" target="_blank">PostgreSQL公式ドキュメント - Indexes</a></li>
+                <li><a href="https://www.postgresql.org/docs/current/queries-table-expressions.html" target="_blank">PostgreSQL公式ドキュメント - JOIN</a></li>
+            </ul>
+        </div>
+
+        <h2 data-prefix="7">集約処理（GROUP BY）と実行計画</h2>
+        <div class="second_layer_content">
+
+            <h3 data-prefix="7.1">この章の概要</h3>
+            <p>
+                第6章では複数テーブルの結合（JOIN）とその実行計画を確認しました。  
+                本章では、Webアプリでよく使われる<strong>集約処理（GROUP BY）</strong>について学びます。  
+                さらに、PostgreSQLが集約処理をどのように実行するかを<strong>実行計画（EXPLAIN ANALYZE）</strong>で確認します。
+            </p>
+
+            <h3 data-prefix="7.2">実装内容</h3>
+            <p>
+                本章では以下の処理を行います：
+            </p>
+            <ul>
+                <li>各グループに所属するユーザー数を集計する</li>
+                <li>GROUP BYを用いた集計結果を取得する</li>
+                <li>同じ処理の実行計画を確認する</li>
+            </ul>
+            <p>
+                使用するテーブルは第6章のまま（<span class="inline-code">drizzle_users</span>、  
+                <span class="inline-code">drizzle_groups</span>、  
+                <span class="inline-code">drizzle_user_groups</span>）です。
+            </p>
+
+            <h3 data-prefix="7.3">集約処理の実装（explainAggregate.ts）</h3>
+            <p>
+                以下のプログラム<span class="inline-code">src/db/explainAggregate.ts</span>では、GROUP BYによる集計結果の取得と  
+                同じ処理の実行計画を確認します。
+            </p>
+
+            <div class="code-card">
+                <div class="code-header">
+                    <span class="code-title">src/db/explainAggregate.ts</span>
+                    <button class="copy-btn" type="button">コピー</button>
+                </div>
+                <pre><code class="code-block">import "dotenv/config";
+import { db } from "../setupDrizzle";
+import { drizzleGroups, drizzleUserGroups } from "./schema";
+import { sql } from "drizzle-orm";
+
+async function main() {
+  console.log("DATABASE_URL =", process.env.DATABASE_URL);
+
+  // PostgreSQL接続確認
+  const version = await db.execute(sql`SELECT version() AS version`);
+  console.log("Connected to PostgreSQL:", version.rows);
+
+  console.log("=== Aggregate Result ===");
+
+  // 集計結果の取得（生SQL）
+  const result = await db.execute(sql`
+    SELECT
+      g.group_name,
+      COUNT(ug.user_id) AS user_count
+    FROM drizzle_groups g
+    LEFT JOIN drizzle_user_groups ug
+      ON g.id = ug.group_id
+    GROUP BY g.id, g.group_name
+    ORDER BY g.id;
+  `);
+
+  console.log(result.rows);
+
+  console.log("=== Explain Aggregate ===");
+
+  // 実行計画の確認
+  const explain = await db.execute(sql`
+    EXPLAIN ANALYZE
+    SELECT
+      g.group_name,
+      COUNT(ug.user_id)
+    FROM drizzle_groups g
+    LEFT JOIN drizzle_user_groups ug
+      ON g.id = ug.group_id
+    GROUP BY g.id, g.group_name;
+  `);
+
+  console.log(explain.rows);
+}
+
+main().catch(console.error);</code></pre>
+            </div>
+
+            <h3 data-prefix="7.4">実行方法</h3>
+            <p>
+                以下のコマンドを実行すると、集計結果とその実行計画が表示されます：
+            </p>
+            <div class="code-card">
+                <div class="code-header">
+                    <span class="code-title">実行コマンド</span>
+                    <button class="copy-btn" type="button">コピー</button>
+                </div>
+                <pre><code class="code-block">npx tsx src/db/explainAggregate.ts</code></pre>
+            </div>
+
+            <h3 data-prefix="7.5">実行計画の読み取り</h3>
+            <p>
+                実行計画には以下のような行が表示されることがあります：
+            </p>
+            <div class="code-card">
+                <div class="code-header">
+                    <span class="code-title">実行計画の例(抜粋)</span>
+                </div>
+                <pre><code class="code-block">HashAggregate
+Group Key: g.id</code></pre>
+            </div>
+            <p>
+                <strong>HashAggregate</strong>は、PostgreSQLがGROUP BY処理を効率的に行うために  
+            使用する最適化手法です。Hashテーブルを使ってグループごとに集計します。  
+            </p>
+            <p>
+                この実行計画では、以下の流れで処理されています：
+            </p>
+            <ul>
+                <li>テーブルを全件読み込む（Seq Scan）</li>
+                <li>結合処理を行う（Hash Join）</li>
+                <li>集計処理を行う（HashAggregate）</li>
+            </ul>
+            <p>
+                PostgreSQLはデータ量や統計情報に基づいて、最適な処理方法を自動で選択します。
+            </p>
+
+            <h3 data-prefix="7.6">確認テスト</h3>
+            <p>
+                <strong>問1 </strong>GROUP BYによる集計処理で、PostgreSQLがハッシュテーブルを用いて集計を行う処理方式を<span class="mask">HashAggregate</span>と呼びます。
+            </p>
+            <p>
+                <strong>問2 </strong>次のうち、GROUP BY処理の性能に影響する要素として最も適切なものはどれですか？<br>
+                A. SELECT文のコメントの長さ<br>
+                B. 集約対象の行数やデータ量<br>
+                C. SQLの改行数<br>
+                D. テーブル名の文字数
+            </p>
+            <p>
+                <strong>答</strong>：<span class="mask">B</span>
+            </p>
+
+            <h3 data-prefix="7.9">参考文献</h3>
+            <ul>
+                <li>
+                    <a href="https://www.postgresql.org/docs/current/using-explain.html" target="_blank">
+                        PostgreSQL公式ドキュメント - EXPLAIN
+                    </a>
+                </li>
+                <li>
+                    <a href="https://www.postgresql.org/docs/current/queries-table-expressions.html" target="_blank">
+                        PostgreSQL公式ドキュメント - GROUP BY
+                    </a>
+                </li>
+                <li>
+                    <a href="https://www.postgresql.org/docs/current/runtime-config-query.html" target="_blank">
+                        PostgreSQL公式ドキュメント - 実行計画最適化
+                    </a>
+                </li>
+            </ul>
+        </div>
+        <p>本コンテンツの作成時間：約23時間</P>
     </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js"></script>
     <script type="text/javascript" src="script.js"></script>
 </body>
 </html>
